@@ -1,7 +1,7 @@
 use acolpi::server::handshake::key_exchange;
 use amplify::Getters;
 use secrecy::SecretString;
-use tokio::{io, net::TcpListener};
+use tokio::{io, net::TcpListener, sync::oneshot};
 
 const SHARED_SECRET: &str = "shared_secret";
 
@@ -10,48 +10,60 @@ pub struct TestApp {
     address: String,
     port: u16,
     shared_secret: SecretString,
+    receiver: oneshot::Receiver<String>,
 }
 
 #[derive(Getters)]
-pub struct Application {
+pub struct Server {
     #[getter(as_copy)]
     port: u16,
+    address: String,
     #[getter(skip)]
     listener: TcpListener,
     #[getter(as_clone)]
     shared_secret: SecretString,
+    #[getter(skip)]
+    transmitter: oneshot::Sender<String>, // TODO: we may need more than a oneshot.
 }
 
-impl Application {
-    pub async fn build() -> io::Result<Self> {
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
+impl Server {
+    pub async fn build() -> io::Result<(Self, oneshot::Receiver<String>)> {
+        let address = String::from("127.0.0.1:0");
+        let listener = TcpListener::bind(&address).await?;
         let port = listener.local_addr()?.port();
         let shared_secret = SecretString::from(SHARED_SECRET);
-        Ok(Application {
-            port,
-            listener,
-            shared_secret,
-        })
+        let (transmitter, receiver) = oneshot::channel();
+        Ok((
+            Server {
+                port,
+                address,
+                listener,
+                shared_secret,
+                transmitter,
+            },
+            receiver,
+        ))
     }
 
     pub async fn run_until_stopped(self) -> anyhow::Result<()> {
         let (stream, _) = self.listener.accept().await?;
         let (_write_handler, _read_handler) = key_exchange(stream, self.shared_secret).await?;
-        // TODO: write something, receive something?
         Ok(())
     }
 }
 
 pub async fn spawn_app() -> TestApp {
-    let app = Application::build().await.unwrap();
+    let (app, receiver) = Server::build().await.unwrap();
     let port = app.port();
     let shared_secret = app.shared_secret();
+    let address = app.address().to_string();
     let _ = tokio::spawn(app.run_until_stopped());
 
     // TODO:
     TestApp {
-        address: "127.0.0.1".into(),
+        address,
         port,
         shared_secret,
+        receiver,
     }
 }
