@@ -9,7 +9,7 @@ use tokio::{
 
 use crate::{
     shared::handshake::KeyExchangeError,
-    socket_handling::{RecvHandler, WriteHandler},
+    socket_handling::{ReadHandler, WriteHandler},
 };
 
 pub async fn key_exchange(
@@ -19,7 +19,7 @@ pub async fn key_exchange(
     // TODO: decide on the return type
     (
         WriteHandler<BufWriter<OwnedWriteHalf>>,
-        RecvHandler<BufReader<OwnedReadHalf>>,
+        ReadHandler<BufReader<OwnedReadHalf>>,
     ),
     KeyExchangeError,
 > {
