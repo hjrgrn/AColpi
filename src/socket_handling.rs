@@ -1,5 +1,21 @@
 use tokio::io::{self, AsyncRead, AsyncWrite};
 
+#[derive(thiserror::Error, Debug)]
+pub enum WriteHandlerError {
+    #[error(transparent)]
+    IoError(#[from] io::Error),
+    #[error(transparent)]
+    MalformedPacket(#[from] anyhow::Error),
+    // TODO: something better
+    #[error(transparent)]
+    EncryptionError(anyhow::Error),
+    // TODO:
+    // #[error(transparent)]
+    // HmacError(#[from] InvalidLength),
+    #[error("WIP")]
+    WIP,
+}
+
 /// # `WriteHandler`
 ///
 /// This struct handles the writing side of a socket.
@@ -10,6 +26,23 @@ use tokio::io::{self, AsyncRead, AsyncWrite};
 // IDEA: this could be a state machine, based on the fact that is using encryption or not.
 pub struct WriteHandler<T: AsyncWrite + Unpin + Send> {
     _writer: T,
+}
+
+impl<T: AsyncWrite + Unpin + Send> WriteHandler<T> {
+    pub fn new(_writer: T) -> Self {
+        // TODO:
+        WriteHandler { _writer }
+    }
+
+    /// # `write_str`
+    ///
+    /// Write a string to the socket being handled.
+    /// If a cipher has been set this method encrypts the message befor
+    /// sending it, plaintext and ciphertext have different sizes.
+    pub async fn write_str(&mut self, _msg: &str) -> Result<(), WriteHandlerError> {
+        // TODO:
+        Err(WriteHandlerError::WIP)
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
