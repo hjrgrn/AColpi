@@ -22,6 +22,7 @@ pub struct Server {
     listener: TcpListener,
     #[getter(as_clone)]
     shared_secret: SecretString,
+    /// Transmits the package received by the server.
     #[getter(skip)]
     transmitter: oneshot::Sender<String>, // TODO: we may need more than a oneshot.
 }
@@ -45,9 +46,17 @@ impl Server {
         ))
     }
 
+    /// Accept a connection. Exchanges the keys with the client that required the
+    /// connection. Waits for a packet to arrive. Transmits the content of the packet
+    /// through the channel [`Server::transmitter`].
     pub async fn run_until_stopped(self) -> anyhow::Result<()> {
         let (stream, _) = self.listener.accept().await?;
-        let (_write_handler, _read_handler) = key_exchange(stream, self.shared_secret).await?;
+        let (_write_handler, mut read_handler) = key_exchange(stream, self.shared_secret).await?;
+        let mut line = String::new();
+        read_handler.recv_str(&mut line).await?;
+        self.transmitter
+            .send(line)
+            .map_err(|e| anyhow::anyhow!(e))?;
         Ok(())
     }
 }
