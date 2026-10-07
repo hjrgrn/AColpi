@@ -1,16 +1,29 @@
 use acolpi::server::handshake::key_exchange;
 use amplify::Getters;
 use secrecy::SecretString;
-use tokio::{io, net::TcpListener, sync::oneshot};
+use tokio::{
+    io,
+    net::TcpListener,
+    sync::oneshot::{self, error::RecvError},
+};
 
-const SHARED_SECRET: &str = "shared_secret";
+pub const SHARED_SECRET: &str = "shared_secret";
 
-#[derive(Getters)]
 pub struct TestApp {
     address: String,
     port: u16,
     shared_secret: SecretString,
     receiver: oneshot::Receiver<String>,
+}
+
+impl TestApp {
+    pub fn full_address(&self) -> String {
+        format!("{}:{}", &self.address, self.port)
+    }
+
+    pub async fn receive_from_server(self) -> Result<String, RecvError> {
+        self.receiver.await
+    }
 }
 
 #[derive(Getters)]
