@@ -42,8 +42,8 @@ pub struct Server {
 
 impl Server {
     pub async fn build() -> io::Result<(Self, oneshot::Receiver<String>)> {
-        let address = String::from("127.0.0.1:0");
-        let listener = TcpListener::bind(&address).await?;
+        let address = String::from("127.0.0.1");
+        let listener = TcpListener::bind(&format!("{address}:0")).await?;
         let port = listener.local_addr()?.port();
         let shared_secret = SecretString::from(SHARED_SECRET);
         let (transmitter, receiver) = oneshot::channel();
