@@ -89,6 +89,19 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
     /// The message received is assigned to the reference of String received by
     /// the caller.
     pub async fn recv_str(&mut self, _line: &mut String) -> Result<(), ReadHandlerError> {
+        // TODO:
+        Err(ReadHandlerError::WIP)
+    }
+
+
+    // `recv_bytes`
+    //
+    // Same as `recv_str` but it returns a vector of bytes on success.
+    // NOTE: For now the encryption is not consider here because this method
+    // is used only once during the handshake, when the cipher is not
+    // defined yet.
+    pub async fn recv_bytes(&mut self) -> Result<Vec<u8>, ReadHandlerError> {
+        // TODO:
         Err(ReadHandlerError::WIP)
     }
 }
