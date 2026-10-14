@@ -1,6 +1,10 @@
+use std::fmt::Debug;
+
 use tokio::io::{self, AsyncRead, AsyncWrite};
 
-#[derive(thiserror::Error, Debug)]
+use crate::shared::utils::error_chain_fmt;
+
+#[derive(thiserror::Error)]
 pub enum WriteHandlerError {
     #[error(transparent)]
     IoError(#[from] io::Error),
@@ -14,6 +18,12 @@ pub enum WriteHandlerError {
     // HmacError(#[from] InvalidLength),
     #[error("WIP")]
     WIP,
+}
+
+impl Debug for WriteHandlerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        error_chain_fmt(self, f)
+    }
 }
 
 /// # `WriteHandler`
@@ -37,15 +47,16 @@ impl<T: AsyncWrite + Unpin + Send> WriteHandler<T> {
     /// # `write_str`
     ///
     /// Write a string to the socket being handled.
-    /// If a cipher has been set this method encrypts the message befor
+    /// If a cipher has been set this method encrypts the message before
     /// sending it, plaintext and ciphertext have different sizes.
-    pub async fn write_str(&mut self, _msg: &str) -> Result<(), WriteHandlerError> {
-        // TODO:
+    pub async fn write_str(&mut self, msg: &str) -> Result<(), WriteHandlerError> {
+        let msg = msg.as_bytes();
+        // TODOFIRST:
         Err(WriteHandlerError::WIP)
     }
 }
 
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error)]
 pub enum ReadHandlerError {
     #[error("Peer closed the connection.")]
     ConnectionInterrupted,
@@ -60,6 +71,12 @@ pub enum ReadHandlerError {
     HmacError(anyhow::Error),
     #[error("WIP")]
     WIP,
+}
+
+impl Debug for ReadHandlerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        error_chain_fmt(self, f)
+    }
 }
 
 /// # `ReadHandler`
@@ -89,10 +106,10 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
     /// The message received is assigned to the reference of String received by
     /// the caller.
     pub async fn recv_str(&mut self, _line: &mut String) -> Result<(), ReadHandlerError> {
-        // TODO:
+        println!("\n\n\n\nHELLO\n\n\n");
+        // TODOFIRST:
         Err(ReadHandlerError::WIP)
     }
-
 
     // `recv_bytes`
     //
