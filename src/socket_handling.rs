@@ -1,5 +1,10 @@
 use std::fmt::Debug;
 
+use aes_gcm::{AesGcm, aes::Aes256};
+use hmac::digest::{
+    consts::{B0, B1},
+    typenum::{UInt, UTerm},
+};
 use tokio::io::{self, AsyncRead, AsyncWrite};
 
 use crate::shared::utils::error_chain_fmt;
@@ -90,12 +95,16 @@ impl Debug for ReadHandlerError {
 // above.
 pub struct ReadHandler<T: AsyncRead + Unpin + Send> {
     _reader: T,
+    s_tools: Option<SafetyTools>,
 }
 
 impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
     pub fn new(_reader: T) -> Self {
         // TODO:
-        Self { _reader }
+        Self {
+            _reader,
+            s_tools: None,
+        }
     }
 
     /// # `recv_str`
@@ -105,8 +114,8 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
     /// a plaintext otherwise, those two have different sizes.
     /// The message received is assigned to the reference of String received by
     /// the caller.
-    pub async fn recv_str(&mut self, _line: &mut String) -> Result<(), ReadHandlerError> {
-        println!("\n\n\n\nHELLO\n\n\n");
+    pub async fn recv_str(&mut self, line: &mut String) -> Result<(), ReadHandlerError> {
+        line.clear();
         // TODOFIRST:
         Err(ReadHandlerError::WIP)
     }
@@ -121,4 +130,10 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
         // TODO:
         Err(ReadHandlerError::WIP)
     }
+}
+
+struct SafetyTools {
+    aes_cipher: AesGcm<Aes256, UInt<UInt<UInt<UInt<UTerm, B1>, B1>, B0>, B0>>,
+    hmac_key: [u8; 32],
+    seq_number: u32,
 }
