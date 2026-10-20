@@ -5,7 +5,7 @@ use hmac::digest::{
     consts::{B0, B1},
     typenum::{UInt, UTerm},
 };
-use tokio::io::{self, AsyncRead, AsyncWrite};
+use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite};
 
 use crate::shared::utils::error_chain_fmt;
 
@@ -97,15 +97,21 @@ impl Debug for ReadHandlerError {
 // IDEA: this could be a state machine, based on the fact that is using encryption or not. See
 // above.
 pub struct ReadHandler<T: AsyncRead + Unpin + Send> {
-    _reader: T,
+    /// Buffer used to store an incoming packet.
+    buffer: [u8; CIPTEXT_W_NONCE_SIZE_AND_HASH],
+    /// Cursor used to extract an incoming packet from the stream.
+    cursor: usize,
+    reader: T,
     s_tools: SafetyTools,
 }
 
 impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
-    pub fn new(_reader: T) -> Self {
+    pub fn new(reader: T) -> Self {
         // TODO:
         Self {
-            _reader,
+            buffer: [0; CIPTEXT_W_NONCE_SIZE_AND_HASH],
+            cursor: 0,
+            reader,
             s_tools: SafetyTools::new(),
         }
     }
@@ -119,6 +125,7 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
     /// the caller.
     pub async fn recv_str(&mut self, line: &mut String) -> Result<(), ReadHandlerError> {
         line.clear();
+        self.receive_packet();
         // TODOFIRST:
         Err(ReadHandlerError::WIP)
     }
@@ -133,8 +140,35 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
         // TODO:
         Err(ReadHandlerError::WIP)
     }
+
+    /// # `recv_str`'s helper function.
+    ///
+    /// Receives the packet from the stream, stores it in [`Self::buffer`].
+    async fn receive_packet(&mut self) -> Result<(), ReadHandlerError> {
+        // Set up the cursor, decide the size, based on the presence of a
+        // [`SafetyTools`] suite.
+        self.cursor = 0;
+        let buffer_size = self.s_tools.buffer_size();
+
+        // Receive packet.
+        while self.cursor < buffer_size {
+            match self.reader.read(&mut self.buffer[self.cursor..]).await {
+                Ok(0) => {
+                    return Err(ReadHandlerError::ConnectionInterrupted);
+                }
+                Ok(x) => {
+                    self.cursor = self.cursor + x;
+                }
+                Err(e) => {
+                    return Err(ReadHandlerError::IoError(e));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
+/// XXX:
 enum SafetyTools {
     Active {
         aes_cipher: AesGcm<Aes256, UInt<UInt<UInt<UInt<UTerm, B1>, B1>, B0>, B0>>,
