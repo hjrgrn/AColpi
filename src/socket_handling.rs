@@ -9,6 +9,9 @@ use tokio::io::{self, AsyncRead, AsyncWrite};
 
 use crate::shared::utils::error_chain_fmt;
 
+pub const CIPTEXT_W_NONCE_SIZE: usize = 1052;
+pub const CIPTEXT_W_NONCE_SIZE_AND_HASH: usize = 1084;
+
 #[derive(thiserror::Error)]
 pub enum WriteHandlerError {
     #[error(transparent)]
@@ -95,7 +98,7 @@ impl Debug for ReadHandlerError {
 // above.
 pub struct ReadHandler<T: AsyncRead + Unpin + Send> {
     _reader: T,
-    s_tools: Option<SafetyTools>,
+    s_tools: SafetyTools,
 }
 
 impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
@@ -103,7 +106,7 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
         // TODO:
         Self {
             _reader,
-            s_tools: None,
+            s_tools: SafetyTools::new(),
         }
     }
 
@@ -132,8 +135,33 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
     }
 }
 
-struct SafetyTools {
-    aes_cipher: AesGcm<Aes256, UInt<UInt<UInt<UInt<UTerm, B1>, B1>, B0>, B0>>,
-    hmac_key: [u8; 32],
-    seq_number: u32,
+enum SafetyTools {
+    Active {
+        aes_cipher: AesGcm<Aes256, UInt<UInt<UInt<UInt<UTerm, B1>, B1>, B0>, B0>>,
+        hmac_key: [u8; 32],
+        seq_number: u32,
+        buffer_size: usize,
+    },
+    Inactive {
+        buffer_size: usize,
+    },
+}
+
+impl SafetyTools {
+    pub fn new() -> Self {
+        Self::Inactive {
+            buffer_size: CIPTEXT_W_NONCE_SIZE,
+        }
+    }
+    pub fn buffer_size(&self) -> usize {
+        match self {
+            Self::Active {
+                aes_cipher: _,
+                hmac_key: _,
+                seq_number: _,
+                buffer_size,
+            } => *buffer_size,
+            Self::Inactive { buffer_size } => *buffer_size,
+        }
+    }
 }
