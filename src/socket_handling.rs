@@ -1,16 +1,32 @@
 use std::fmt::Debug;
 
-use aes_gcm::{AesGcm, aes::Aes256};
-use hmac::digest::{
-    consts::{B0, B1},
-    typenum::{UInt, UTerm},
+use aes_gcm::{AesGcm, Nonce, aead::Aead, aes::Aes256};
+use hmac::{
+    Hmac, Mac,
+    digest::{
+        KeyInit,
+        consts::{B0, B1},
+        typenum::{UInt, UTerm},
+    },
 };
+use sha2::Sha256;
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite};
 
 use crate::shared::utils::error_chain_fmt;
 
-pub const CIPTEXT_W_NONCE_SIZE: usize = 1052;
-pub const CIPTEXT_W_NONCE_SIZE_AND_HASH: usize = 1084;
+type AG256 = AesGcm<Aes256, UInt<UInt<UInt<UInt<UTerm, B1>, B1>, B0>, B0>>;
+
+// TODO: Packet size will have to be configurable. Maybe the whole handlers, maybe they should be
+// traits.
+//
+/// Size of the ciphertext block in bytes.
+pub const CIP_TEXT_SIZE: usize = 1040;
+/// Size of the block composed of the ciphertext + the nonce.
+pub const CIP_TEXT_W_NONCE_SIZE: usize = 1052;
+/// Size of the block composed of the ciphertext + the nonce + hash.
+pub const CIP_TEXT_W_NONCE_SIZE_AND_HASH: usize = 1084;
+/// Size of the plaintext block.
+pub const PLAIN_PACKET_SIZE: usize = 1024;
 
 #[derive(thiserror::Error)]
 pub enum WriteHandlerError {
@@ -59,7 +75,7 @@ impl<T: AsyncWrite + Unpin + Send> WriteHandler<T> {
     /// sending it, plaintext and ciphertext have different sizes.
     pub async fn write_str(&mut self, msg: &str) -> Result<(), WriteHandlerError> {
         let msg = msg.as_bytes();
-        // TODOFIRST:
+        // FROMHERE:
         Err(WriteHandlerError::WIP)
     }
 }
@@ -98,10 +114,12 @@ impl Debug for ReadHandlerError {
 // above.
 pub struct ReadHandler<T: AsyncRead + Unpin + Send> {
     /// Buffer used to store an incoming packet.
-    buffer: [u8; CIPTEXT_W_NONCE_SIZE_AND_HASH],
+    buffer: [u8; CIP_TEXT_W_NONCE_SIZE_AND_HASH],
     /// Cursor used to extract an incoming packet from the stream.
     cursor: usize,
+    /// Stream reader.
     reader: T,
+    /// Safety tool suite.
     s_tools: SafetyTools,
 }
 
@@ -109,7 +127,7 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
     pub fn new(reader: T) -> Self {
         // TODO:
         Self {
-            buffer: [0; CIPTEXT_W_NONCE_SIZE_AND_HASH],
+            buffer: [0; CIP_TEXT_W_NONCE_SIZE_AND_HASH],
             cursor: 0,
             reader,
             s_tools: SafetyTools::new(),
@@ -125,8 +143,9 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
     /// the caller.
     pub async fn recv_str(&mut self, line: &mut String) -> Result<(), ReadHandlerError> {
         line.clear();
-        self.receive_packet();
-        // TODOFIRST:
+        self.receive_packet().await?;
+
+        // FROMHERE:
         Err(ReadHandlerError::WIP)
     }
 
@@ -166,12 +185,51 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
         }
         Ok(())
     }
+
+    /// # `recv_str`'s helper function
+    fn decipher_packet(&mut self) -> Result<(), ReadHandlerError> {
+        match &self.s_tools {
+            SafetyTools::Active {
+                aes_gcm_cipher: aes_cipher,
+                hmac_key,
+                seq_number: _,
+                buffer_size: _,
+            } => {
+                // Verify the bloc `ciphertext + nonce` using the provided hash.
+                let mut hmac: Hmac<Sha256> = Hmac::new_from_slice(hmac_key)
+                    .map_err(|e| ReadHandlerError::HmacError(e.into()))?;
+                hmac.update(&self.buffer[..CIP_TEXT_W_NONCE_SIZE]);
+                hmac.verify_slice(&self.buffer[CIP_TEXT_W_NONCE_SIZE..])
+                    .map_err(|e| ReadHandlerError::HmacError(e.into()))?;
+
+                // Extract nonce.
+                let nonce: &[u8; CIP_TEXT_W_NONCE_SIZE - CIP_TEXT_SIZE] = &self.buffer
+                    [CIP_TEXT_SIZE..CIP_TEXT_W_NONCE_SIZE]
+                    .try_into()
+                    .unwrap();
+                let nonce = Nonce::from(*nonce);
+
+                // Decrypt the ciphertext.
+                let buffer = aes_cipher
+                    .decrypt(&nonce, &self.buffer[..CIP_TEXT_SIZE])
+                    .map_err(|e| ReadHandlerError::EncryptionError(anyhow::anyhow!(e)))?;
+
+                // Store the plaintext in the internal buffer.
+                for i in 0..PLAIN_PACKET_SIZE {
+                    self.buffer[i] = buffer[i];
+                }
+            }
+            SafetyTools::Inactive { buffer_size: _ } => {}
+        }
+
+        Ok(())
+    }
 }
 
 /// XXX:
 enum SafetyTools {
     Active {
-        aes_cipher: AesGcm<Aes256, UInt<UInt<UInt<UInt<UTerm, B1>, B1>, B0>, B0>>,
+        aes_gcm_cipher: AG256,
         hmac_key: [u8; 32],
         seq_number: u32,
         buffer_size: usize,
@@ -184,13 +242,13 @@ enum SafetyTools {
 impl SafetyTools {
     pub fn new() -> Self {
         Self::Inactive {
-            buffer_size: CIPTEXT_W_NONCE_SIZE,
+            buffer_size: CIP_TEXT_W_NONCE_SIZE,
         }
     }
     pub fn buffer_size(&self) -> usize {
         match self {
             Self::Active {
-                aes_cipher: _,
+                aes_gcm_cipher: _,
                 hmac_key: _,
                 seq_number: _,
                 buffer_size,
