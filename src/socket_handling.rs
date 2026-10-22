@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 
 use aes_gcm::{AesGcm, Nonce, aead::Aead, aes::Aes256};
+use anyhow::Context;
 use hmac::{
     Hmac, Mac,
     digest::{
@@ -27,6 +28,10 @@ pub const CIP_TEXT_W_NONCE_SIZE: usize = 1052;
 pub const CIP_TEXT_W_NONCE_SIZE_AND_HASH: usize = 1084;
 /// Size of the plaintext block.
 pub const PLAIN_PACKET_SIZE: usize = 1024;
+/// XXX:
+pub const P_PACKET_PREFIX_SIZE: usize = 4;
+/// XXX:
+pub const SEQ_NUM_SIZE: usize = 10;
 
 #[derive(thiserror::Error)]
 pub enum WriteHandlerError {
@@ -144,6 +149,8 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
     pub async fn recv_str(&mut self, line: &mut String) -> Result<(), ReadHandlerError> {
         line.clear();
         self.receive_packet().await?;
+        self.decipher_packet()?;
+        let size = self.validate_packet()?;
 
         // FROMHERE:
         Err(ReadHandlerError::WIP)
@@ -224,16 +231,57 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
 
         Ok(())
     }
+
+    // TODO: comment, specify use of cursor
+    fn validate_packet(&mut self) -> Result<usize, ReadHandlerError> {
+        // Validate packet
+        self.cursor = P_PACKET_PREFIX_SIZE;
+        let size: usize = str::from_utf8(&self.buffer[0..self.cursor])
+            .context("Malformed size prefix")?
+            .parse()
+            .context("Malformed size prefix")?;
+        match &mut self.s_tools {
+            SafetyTools::Active {
+                aes_gcm_cipher: _,
+                hmac_key: _,
+                seq_number,
+                buffer_size: _,
+            } => {
+                let recv_sec_num: u32 =
+                    str::from_utf8(&self.buffer[self.cursor..self.cursor + SEQ_NUM_SIZE])
+                        .context("Malformed seq number")?
+                        .parse()
+                        .context("Malformed seq number")?;
+                if recv_sec_num != *seq_number {
+                    return Err(ReadHandlerError::MalformedPacket(anyhow::anyhow!(
+                        "Expecting a different seq number"
+                    )));
+                }
+                *seq_number = seq_number.wrapping_add(1);
+                self.cursor = self.cursor + SEQ_NUM_SIZE;
+            }
+            SafetyTools::Inactive { buffer_size: _ } => {}
+        }
+        if size > PLAIN_PACKET_SIZE - self.cursor {
+            return Err(ReadHandlerError::MalformedPacket(anyhow::anyhow!(
+                "Size of the packet out of bound"
+            )));
+        }
+        Ok(size)
+    }
 }
 
 /// XXX:
 enum SafetyTools {
+    /// XXX: when active provides encryption, message integrity, message authentication, reply
+    /// attack protection.
     Active {
         aes_gcm_cipher: AG256,
         hmac_key: [u8; 32],
         seq_number: u32,
         buffer_size: usize,
     },
+    /// XXX:
     Inactive {
         buffer_size: usize,
     },
