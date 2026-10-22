@@ -232,9 +232,14 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
         Ok(())
     }
 
-    // TODO: comment, specify use of cursor
+    /// [`recv_str`] helper method.
+    ///
+    /// Extract the size (and the seq number, if [`SafetyTools::Active`]) from the plaintext block.
+    /// Validate the plaintext block against the expected sequenze number, if [`SafetyTools::Active`].
+    /// Check if the size of the packet is out of bound.
+    /// Returns the size of the packet.
     fn validate_packet(&mut self) -> Result<usize, ReadHandlerError> {
-        // Validate packet
+        // Extract seq number.
         self.cursor = P_PACKET_PREFIX_SIZE;
         let size: usize = str::from_utf8(&self.buffer[0..self.cursor])
             .context("Malformed size prefix")?
@@ -247,6 +252,7 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
                 seq_number,
                 buffer_size: _,
             } => {
+                // Extract and verifies seq number.
                 let recv_sec_num: u32 =
                     str::from_utf8(&self.buffer[self.cursor..self.cursor + SEQ_NUM_SIZE])
                         .context("Malformed seq number")?
@@ -257,11 +263,13 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
                         "Expecting a different seq number"
                     )));
                 }
+                // Update seq num and cursor.
                 *seq_number = seq_number.wrapping_add(1);
                 self.cursor = self.cursor + SEQ_NUM_SIZE;
             }
             SafetyTools::Inactive { buffer_size: _ } => {}
         }
+        // Verifies packet size.
         if size > PLAIN_PACKET_SIZE - self.cursor {
             return Err(ReadHandlerError::MalformedPacket(anyhow::anyhow!(
                 "Size of the packet out of bound"
@@ -282,9 +290,7 @@ enum SafetyTools {
         buffer_size: usize,
     },
     /// XXX:
-    Inactive {
-        buffer_size: usize,
-    },
+    Inactive { buffer_size: usize },
 }
 
 impl SafetyTools {
