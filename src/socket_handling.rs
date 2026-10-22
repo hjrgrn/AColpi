@@ -151,9 +151,18 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
         self.receive_packet().await?;
         self.decipher_packet()?;
         let size = self.validate_packet()?;
+        // TODO: we may make it more efficient.
+        let l = str::from_utf8(&self.buffer[self.cursor..self.cursor + size])
+            .context("Line sent contained invalid UTF-8")?;
+        *line = l.to_string();
+        // This check is not necessary.
+        if size != line.len() {
+            return Err(ReadHandlerError::MalformedPacket(anyhow::anyhow!(
+                "Size prefix and lenght of the line are different. This should not happen since the size of the string has been checked and `str::from_utf8` fails if there is an invalid UTF-8 char, even if the first part of the block is a perfectly valid string."
+            )));
+        }
 
-        // FROMHERE:
-        Err(ReadHandlerError::WIP)
+        Ok(())
     }
 
     // `recv_bytes`
@@ -235,7 +244,7 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
     /// [`recv_str`] helper method.
     ///
     /// Extract the size (and the seq number, if [`SafetyTools::Active`]) from the plaintext block.
-    /// Validate the plaintext block against the expected sequenze number, if [`SafetyTools::Active`].
+    /// Validate the plaintext block against the expected sequence number, if [`SafetyTools::Active`].
     /// Check if the size of the packet is out of bound.
     /// Returns the size of the packet.
     fn validate_packet(&mut self) -> Result<usize, ReadHandlerError> {
