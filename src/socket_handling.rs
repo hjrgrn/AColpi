@@ -64,13 +64,23 @@ impl Debug for WriteHandlerError {
 // XXX: comment.
 // IDEA: this could be a state machine, based on the fact that is using encryption or not.
 pub struct WriteHandler<T: AsyncWrite + Unpin + Send> {
+    cursor: usize,
+    buffer: [u8; PLAIN_PACKET_SIZE],
+    encrypted_buffer: [u8; CIP_TEXT_W_NONCE_SIZE_AND_HASH],
+    s_tools: SafetyTools,
     _writer: T,
 }
 
 impl<T: AsyncWrite + Unpin + Send> WriteHandler<T> {
     pub fn new(_writer: T) -> Self {
         // TODO:
-        WriteHandler { _writer }
+        WriteHandler {
+            cursor: 0,
+            buffer: [0; PLAIN_PACKET_SIZE],
+            encrypted_buffer: [0; CIP_TEXT_W_NONCE_SIZE_AND_HASH],
+            s_tools: SafetyTools::new(),
+            _writer,
+        }
     }
 
     /// # `write_str`
@@ -80,8 +90,74 @@ impl<T: AsyncWrite + Unpin + Send> WriteHandler<T> {
     /// sending it, plaintext and ciphertext have different sizes.
     pub async fn write_str(&mut self, msg: &str) -> Result<(), WriteHandlerError> {
         let msg = msg.as_bytes();
-        // FROMHERE:
-        Err(WriteHandlerError::WIP)
+        self.prepare_packet(&msg).await?;
+
+        Ok(())
+    }
+
+    /// XXX: `write_str`'s helper `prepare_packet`
+    // IDEA: the framing protocol should be configurable
+    async fn prepare_packet(&mut self, msg: &[u8]) -> Result<(), WriteHandlerError> {
+        self.cursor = 0;
+        let size = msg.len();
+        if size > PLAIN_PACKET_SIZE - P_PACKET_PREFIX_SIZE - SEQ_NUM_SIZE {
+            // TODO: maybe a custom error
+            return Err(WriteHandlerError::MalformedPacket(anyhow::anyhow!(
+                "Message to be sent is too long."
+            )));
+        }
+
+        let size_bytes = Vec::from(size.to_string().as_bytes());
+        let len_size_bytes = size_bytes.len();
+        // Padding.
+        while self.cursor < (P_PACKET_PREFIX_SIZE - len_size_bytes) {
+            self.buffer[self.cursor] = b'0';
+            self.cursor = self.cursor + 1;
+        }
+        // Write size to buffer.
+        for &i in size_bytes.iter() {
+            self.buffer[self.cursor] = i;
+            self.cursor = self.cursor + 1;
+        }
+
+        match &mut self.s_tools {
+            // IDEA: the encryption could be delegated to `SafetyTools`, it may be possible to make
+            // it a trait and allow the user to have different encryption methods.
+            SafetyTools::Active {
+                aes_gcm_cipher: _,
+                hmac_key: _,
+                seq_number,
+                buffer_size: _,
+            } => {
+                // Add sequence number to the buffer if `SafetyTools::Active`.
+                let seq_num_bytes = Vec::from(seq_number.to_string().as_bytes());
+                let len_seq_num_bytes = seq_num_bytes.len();
+                // Padding.
+                while self.cursor < P_PACKET_PREFIX_SIZE + (*seq_number - len_seq_num_bytes) {
+                    self.buffer[self.cursor] = b'0';
+                    self.cursor = self.cursor + 1;
+                }
+                for &i in seq_num_bytes.iter() {
+                    self.buffer[self.cursor] = i;
+                    self.cursor = self.cursor + 1;
+                }
+                // Increase sequence number.
+                *seq_number = seq_number.wrapping_add(1)
+            }
+            SafetyTools::Inactive { buffer_size: _ } => {}
+        }
+        // Copy the message to the buffer.
+        for &i in msg.iter() {
+            self.buffer[self.cursor] = i;
+            self.cursor = self.cursor + 1;
+        }
+        // Fill in remaining space in the buffer, erase previous data.
+        while self.cursor < PLAIN_PACKET_SIZE {
+            self.buffer[self.cursor] = 0;
+            self.cursor = self.cursor + 1;
+        }
+
+        Ok(())
     }
 }
 
@@ -295,7 +371,7 @@ enum SafetyTools {
     Active {
         aes_gcm_cipher: AG256,
         hmac_key: [u8; 32],
-        seq_number: u32,
+        seq_number: usize,
         buffer_size: usize,
     },
     /// XXX:
