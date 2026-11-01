@@ -1,17 +1,21 @@
 use std::fmt::Debug;
 
-use aes_gcm::{AesGcm, Nonce, aead::Aead, aes::Aes256};
+use aes_gcm::{
+    AesGcm, Nonce,
+    aead::{Aead, Generate},
+    aes::Aes256,
+};
 use anyhow::Context;
 use hmac::{
     Hmac, Mac,
     digest::{
-        KeyInit,
+        InvalidLength, KeyInit,
         consts::{B0, B1},
         typenum::{UInt, UTerm},
     },
 };
 use sha2::Sha256;
-use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite};
+use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::shared::utils::error_chain_fmt;
 
@@ -41,10 +45,9 @@ pub enum WriteHandlerError {
     MalformedPacket(#[from] anyhow::Error),
     // TODO: something better
     #[error(transparent)]
-    EncryptionError(anyhow::Error),
-    // TODO:
-    // #[error(transparent)]
-    // HmacError(#[from] InvalidLength),
+    EncryptionError(#[from] aes_gcm::Error),
+    #[error(transparent)]
+    HmacError(#[from] InvalidLength),
     #[error("WIP")]
     WIP,
 }
@@ -68,18 +71,18 @@ pub struct WriteHandler<T: AsyncWrite + Unpin + Send> {
     buffer: [u8; PLAIN_PACKET_SIZE],
     encrypted_buffer: [u8; CIP_TEXT_W_NONCE_SIZE_AND_HASH],
     s_tools: SafetyTools,
-    _writer: T,
+    writer: T,
 }
 
 impl<T: AsyncWrite + Unpin + Send> WriteHandler<T> {
-    pub fn new(_writer: T) -> Self {
+    pub fn new(writer: T) -> Self {
         // TODO:
         WriteHandler {
             cursor: 0,
             buffer: [0; PLAIN_PACKET_SIZE],
             encrypted_buffer: [0; CIP_TEXT_W_NONCE_SIZE_AND_HASH],
             s_tools: SafetyTools::new(),
-            _writer,
+            writer,
         }
     }
 
@@ -91,6 +94,42 @@ impl<T: AsyncWrite + Unpin + Send> WriteHandler<T> {
     pub async fn write_str(&mut self, msg: &str) -> Result<(), WriteHandlerError> {
         let msg = msg.as_bytes();
         self.prepare_packet(&msg).await?;
+
+        match &self.s_tools {
+            SafetyTools::Active {
+                aes_gcm_cipher,
+                hmac_key,
+                seq_number: _,
+                buffer_size: _,
+            } => {
+                // Encrypt buffer and write the content to `self.encrypted_buffer` if
+                // `SafetyTools::Active`.
+                // FIX: nonce is 12 bytes here. We need to review the entire thing to know if
+                // everything is correct.
+                let nonce = Nonce::generate();
+                // Encrypt buffer.
+                let mut new_buff = aes_gcm_cipher.encrypt(&nonce, &self.buffer[..])?;
+                // Add nonce to encrypted buffer.
+                new_buff.extend(&nonce);
+                // Write encrypted buffer to `self.encrypted_buffer`.
+                for i in 0..new_buff.len() {
+                    self.encrypted_buffer[i] = new_buff[i];
+                }
+                // Generate hmac.
+                let mut hmac: Hmac<Sha256> = Hmac::new_from_slice(hmac_key)?;
+                hmac.update(&self.encrypted_buffer[..CIP_TEXT_W_NONCE_SIZE]);
+                let hash = hmac.finalize().into_bytes();
+                let mut index = 0;
+                // Write hmac to `self.encrypted_buffer`.
+                for i in CIP_TEXT_W_NONCE_SIZE..CIP_TEXT_W_NONCE_SIZE_AND_HASH {
+                    self.encrypted_buffer[i] = hash[index];
+                    index = index + 1;
+                }
+            }
+            SafetyTools::Inactive { buffer_size: _ } => {}
+        }
+
+        self.send_packet().await?;
 
         Ok(())
     }
@@ -157,6 +196,35 @@ impl<T: AsyncWrite + Unpin + Send> WriteHandler<T> {
             self.cursor = self.cursor + 1;
         }
 
+        Ok(())
+    }
+
+    /// [`Self::write_str`]'s helper `send_packet`.
+    async fn send_packet(&mut self) -> Result<(), WriteHandlerError> {
+        self.cursor = 0;
+        match self.s_tools {
+            SafetyTools::Active {
+                aes_gcm_cipher: _,
+                hmac_key: _,
+                seq_number: _,
+                buffer_size: _,
+            } => {
+                while self.cursor < CIP_TEXT_W_NONCE_SIZE_AND_HASH {
+                    self.cursor = self.cursor
+                        + self
+                            .writer
+                            .write(&self.encrypted_buffer[self.cursor..])
+                            .await?;
+                }
+            }
+            SafetyTools::Inactive { buffer_size: _ } => {
+                while self.cursor < PLAIN_PACKET_SIZE {
+                    self.cursor =
+                        self.cursor + self.writer.write(&self.buffer[self.cursor..]).await?;
+                }
+            }
+        }
+        self.writer.flush().await?;
         Ok(())
     }
 }
@@ -338,7 +406,7 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
                 buffer_size: _,
             } => {
                 // Extract and verifies seq number.
-                let recv_sec_num: u32 =
+                let recv_sec_num: usize =
                     str::from_utf8(&self.buffer[self.cursor..self.cursor + SEQ_NUM_SIZE])
                         .context("Malformed seq number")?
                         .parse()
