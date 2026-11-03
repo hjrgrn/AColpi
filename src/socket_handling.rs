@@ -283,8 +283,6 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
         }
     }
 
-    /// # `recv_str`
-    ///
     /// Receives a string from the socket being handled.
     /// If a cipher has been set this method expects to receive a ciphertext,
     /// a plaintext otherwise, those two have different sizes.
@@ -309,18 +307,27 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
         Ok(())
     }
 
-    // `recv_bytes`
-    //
-    // Same as `recv_str` but it returns a vector of bytes on success.
-    // NOTE: For now the encryption is not consider here because this method
-    // is used only once during the handshake, when the cipher is not
-    // defined yet.
+    /// Same as `recv_str` but it returns a vector of bytes on success.
+    ///
+    /// NOTE: For now the encryption is not consider here because this method
+    /// is used only once during the handshake, when the cipher isn't
+    /// set up yet.
     pub async fn recv_bytes(&mut self) -> Result<Vec<u8>, ReadHandlerError> {
-        // TODO:
-        Err(ReadHandlerError::WIP)
+        self.receive_packet().await?;
+        let size = self.validate_packet()?;
+
+        // TODO: rewrite this without the memcopy?
+        let vec = Vec::from(&self.buffer[P_PACKET_PREFIX_SIZE..P_PACKET_PREFIX_SIZE + size]);
+        if size != vec.len() {
+            return Err(ReadHandlerError::MalformedPacket(anyhow::anyhow!(
+                "Size prefix and lenght of the line are different."
+            )));
+        }
+
+        Ok(vec)
     }
 
-    /// # `recv_str`'s helper function.
+    /// [`ReadHandler::recv_str`]'s helper function.
     ///
     /// Receives the packet from the stream, stores it in [`Self::buffer`].
     async fn receive_packet(&mut self) -> Result<(), ReadHandlerError> {
@@ -346,7 +353,9 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
         Ok(())
     }
 
-    /// # `recv_str`'s helper function
+    /// [`ReadHandler::recv_str`]'s helper function
+    ///
+    /// XXX:
     fn decipher_packet(&mut self) -> Result<(), ReadHandlerError> {
         match &self.s_tools {
             SafetyTools::Active {
@@ -385,7 +394,7 @@ impl<T: AsyncRead + Unpin + Send> ReadHandler<T> {
         Ok(())
     }
 
-    /// [`recv_str`] helper method.
+    /// [`ReadHandler::recv_str`] helper method.
     ///
     /// Extract the size (and the seq number, if [`SafetyTools::Active`]) from the plaintext block.
     /// Validate the plaintext block against the expected sequence number, if [`SafetyTools::Active`].
